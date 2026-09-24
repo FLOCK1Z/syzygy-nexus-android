@@ -21,7 +21,7 @@ jobs:
 
       - name: Configurar Gradle Wrapper
         run: |
-          gradle wrapper
+          gradle wrapper --gradle-version 8.5
           chmod +x gradlew
 
       - name: Compilar APK Universal
