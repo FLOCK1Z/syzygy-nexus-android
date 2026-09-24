@@ -1,6 +1,7 @@
 package com.syzygy.nexus
 
 import android.annotation.SuppressLint
+import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -10,9 +11,8 @@ import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import androidx.appcompat.app.AppCompatActivity
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : Activity() {
 
     private lateinit var webView: WebView
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
@@ -23,10 +23,14 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        window.decorView.systemUiVisibility = (
-            View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-            or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-        )
+        try {
+            window.decorView.systemUiVisibility = (
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+            )
+        } catch (e: Exception) {
+            // Previne falhas em versões antigas do Android
+        }
 
         webView = WebView(this)
         setContentView(webView)
@@ -39,15 +43,23 @@ class MainActivity : AppCompatActivity() {
         settings.setSupportZoom(false)
         settings.cacheMode = WebSettings.LOAD_DEFAULT
 
-        webView.addJavascriptInterface(NexusNativeBridge(this), "NexusNativeBridge")
+        try {
+            webView.addJavascriptInterface(NexusNativeBridge(this), "NexusNativeBridge")
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
 
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
-                if (url != null && url.startsWith(targetUrl)) {
+                if (url != null && (url.startsWith(targetUrl) || url.contains("hf.space"))) {
                     return false
                 }
-                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                startActivity(intent)
+                try {
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    return false
+                }
                 return true
             }
         }
@@ -64,7 +76,12 @@ class MainActivity : AppCompatActivity() {
                 val intent = fileChooserParams?.createIntent() ?: Intent(Intent.ACTION_GET_CONTENT).apply {
                     type = "*/*"
                 }
-                startActivityForResult(intent, fileChooserRequestCode)
+                try {
+                    startActivityForResult(intent, fileChooserRequestCode)
+                } catch (e: Exception) {
+                    this@MainActivity.filePathCallback = null
+                    return false
+                }
                 return true
             }
         }
