@@ -26,6 +26,13 @@ jobs:
         run: sdkmanager 'platforms;android-36' 'build-tools;35.0.0'
       - name: Testar e gerar candidata nativa
         run: gradle :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:bundleRelease --no-daemon
+      - name: Guardar APK para teste no celular
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nexus-APK-TESTE-NATIVO
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
       - name: Guardar AAB candidato sem assinatura de publicação
         uses: actions/upload-artifact@v4
         with:
