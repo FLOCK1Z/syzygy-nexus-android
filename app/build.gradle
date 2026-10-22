@@ -1,45 +1,76 @@
 plugins {
     id 'com.android.application'
     id 'org.jetbrains.kotlin.android'
+    id 'org.jetbrains.kotlin.plugin.compose'
 }
-
+def publicConfig = { name -> (providers.gradleProperty(name).orElse(providers.environmentVariable(name)).getOrElse('')).replace('\\','\\\\').replace('"','\\"') }
 android {
     namespace 'com.syzygy.nexus'
-    compileSdk 34
-
+    compileSdk 36
     defaultConfig {
-        applicationId "com.syzygy.nexus"
+        applicationId 'com.syzygy.nexus'
         minSdk 26
-        targetSdk 34
-        versionCode 1
-        versionName "1.0-beta"
-
-        ndk {
-            abiFilters "armeabi-v7a", "arm64-v8a", "x86", "x86_64"
+        targetSdk 36
+        versionCode 2
+        versionName '2.0.0-native-preview'
+        resValue 'string', 'app_name', 'Nexus'
+        buildConfigField 'String', 'GOOGLE_WEB_CLIENT_ID', '"'+publicConfig('GOOGLE_WEB_CLIENT_ID')+'"'
+        buildConfigField 'String', 'PRIVACY_URL', '"'+publicConfig('NEXUS_PRIVACY_URL')+'"'
+        buildConfigField 'String', 'DELETE_ACCOUNT_URL', '"'+publicConfig('NEXUS_DELETE_ACCOUNT_URL')+'"'
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+    }
+    signingConfigs {
+        if (System.getenv('NEXUS_KEYSTORE')) {
+            release {
+                storeFile file(System.getenv('NEXUS_KEYSTORE'))
+                storePassword System.getenv('NEXUS_STORE_PASSWORD')
+                keyAlias System.getenv('NEXUS_KEY_ALIAS')
+                keyPassword System.getenv('NEXUS_KEY_PASSWORD')
+            }
         }
     }
-
     buildTypes {
+        debug { applicationIdSuffix '.nativepreview'; versionNameSuffix '-debug'; resValue 'string', 'app_name', 'Nexus (teste nativo)' }
         release {
+            debuggable false
             minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-        }
-        debug {
-            debuggable true
+            if (System.getenv('NEXUS_KEYSTORE')) signingConfig signingConfigs.release
         }
     }
-    compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
-    }
-    kotlinOptions {
-        jvmTarget = '17'
-    }
+    buildFeatures { compose true; buildConfig true }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+    kotlinOptions { jvmTarget = '17' }
 }
-
 dependencies {
-    implementation 'androidx.core:core-ktx:1.12.0'
-    implementation 'androidx.appcompat:appcompat:1.6.1'
-    implementation 'com.google.android.material:material:1.11.0'
-    implementation 'androidx.webkit:webkit:1.10.0'
+    implementation platform('androidx.compose:compose-bom:2025.10.00')
+    implementation 'androidx.activity:activity-compose:1.10.1'
+    implementation 'androidx.core:core-ktx:1.16.0'
+    implementation 'androidx.compose.material3:material3'
+    implementation 'androidx.compose.material:material-icons-extended'
+    implementation 'androidx.compose.ui:ui-tooling-preview'
+    debugImplementation 'androidx.compose.ui:ui-tooling'
+    implementation 'androidx.lifecycle:lifecycle-viewmodel-compose:2.9.4'
+    implementation 'androidx.lifecycle:lifecycle-runtime-compose:2.9.4'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2'
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    implementation 'androidx.credentials:credentials:1.5.0'
+    implementation 'androidx.credentials:credentials-play-services-auth:1.5.0'
+    implementation 'com.google.android.libraries.identity.googleid:googleid:1.1.1'
+    implementation 'io.noties.markwon:core:4.6.2'
+    implementation 'io.coil-kt:coil-compose:2.7.0'
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'com.squareup.okhttp3:mockwebserver:4.12.0'
+    testImplementation 'org.json:json:20240303'
+    androidTestImplementation platform('androidx.compose:compose-bom:2025.10.00')
+    androidTestImplementation 'androidx.compose.ui:ui-test-junit4'
+    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
+    debugImplementation 'androidx.compose.ui:ui-test-manifest'
+}
+tasks.register('verifyPlayRelease') {
+    doLast {
+        if (!System.getenv('NEXUS_KEYSTORE')) throw new GradleException('Configure a chave de upload do Play. Nunca assine a publicação com a chave debug.')
+        ['GOOGLE_WEB_CLIENT_ID','NEXUS_PRIVACY_URL','NEXUS_DELETE_ACCOUNT_URL'].each { key ->
+            if (!publicConfig(key)) throw new GradleException('Configuração de publicação ausente: '+key)
+        }
+    }
 }

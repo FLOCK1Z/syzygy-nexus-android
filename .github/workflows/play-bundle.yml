@@ -1,0 +1,43 @@
+name: Gerar AAB assinado para revisão
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  signed-bundle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+      - run: sdkmanager 'platforms;android-36' 'build-tools;35.0.0'
+      - name: Verificar configuração e gerar AAB release
+        shell: bash
+        env:
+          NEXUS_KEYSTORE_BASE64: ${{ secrets.NEXUS_KEYSTORE_BASE64 }}
+          NEXUS_STORE_PASSWORD: ${{ secrets.NEXUS_STORE_PASSWORD }}
+          NEXUS_KEY_ALIAS: ${{ secrets.NEXUS_KEY_ALIAS }}
+          NEXUS_KEY_PASSWORD: ${{ secrets.NEXUS_KEY_PASSWORD }}
+          NEXUS_PRIVACY_URL: ${{ vars.NEXUS_PRIVACY_URL }}
+          NEXUS_DELETE_ACCOUNT_URL: ${{ vars.NEXUS_DELETE_ACCOUNT_URL }}
+        run: |
+          set -euo pipefail
+          test -n "$NEXUS_KEYSTORE_BASE64" || { echo '::error::Configure a chave de upload antes de gerar o release.'; exit 1; }
+          umask 077
+          export NEXUS_KEYSTORE="$RUNNER_TEMP/nexus-upload.jks"
+          trap 'rm -f "$NEXUS_KEYSTORE"' EXIT
+          printf '%s' "$NEXUS_KEYSTORE_BASE64" | base64 --decode > "$NEXUS_KEYSTORE"
+          gradle :app:verifyPlayRelease :app:testReleaseUnitTest :app:lintRelease :app:bundleRelease --no-daemon
+      - name: Guardar AAB assinado sem publicar na loja
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nexus-Play-Store-AAB-assinado
+          path: app/build/outputs/bundle/release/*.aab
+          if-no-files-found: error

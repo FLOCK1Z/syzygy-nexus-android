@@ -1,34 +1,40 @@
-name: Compilar APK Android Nexus
-
+name: Validar Android nativo
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: [main, master, 'native/**']
+  pull_request:
   workflow_dispatch:
-
+permissions:
+  contents: read
 jobs:
   build:
     runs-on: ubuntu-latest
-
+    timeout-minutes: 30
     steps:
-      - name: Obter Código do Repositório
-        uses: actions/checkout@v4
-
-      - name: Configurar Java 17
-        uses: actions/setup-java@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
-          java-version: 17
-
-      - name: Configurar Gradle 8.5 Oficial
-        uses: gradle/actions/setup-gradle@v3
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "8.5"
-
-      - name: Compilar APK Universal
-        run: gradle assembleDebug --no-daemon
-
-      - name: Disponibilizar Ficheiro APK
+          gradle-version: '8.13'
+      - name: Instalar SDK Android
+        run: sdkmanager 'platforms;android-36' 'build-tools;35.0.0'
+      - name: Testar e gerar candidata nativa
+        run: gradle :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:bundleRelease --no-daemon
+      - name: Guardar AAB candidato sem assinatura de publicação
         uses: actions/upload-artifact@v4
         with:
-          name: Syzygy-Nexus-Beta-ARM
-          path: app/build/outputs/apk/debug/*.apk
+          name: Nexus-AAB-CANDIDATO-NAO-ASSINADO
+          path: app/build/outputs/bundle/release/*.aab
+          if-no-files-found: error
+      - name: Resultados de validação
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nexus-validacao-android
+          path: |
+            app/build/reports/
+            app/build/test-results/
