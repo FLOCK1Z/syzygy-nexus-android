@@ -30,6 +30,9 @@ data class NexusState(
     val workAutonomy: String = "step",
     val desktopStyle: String = "ubuntu",
     val approvalBusy: String = "",
+    val workConnected: Boolean = true,
+    val workLastUpdate: Long = 0L,
+    val stopRequestedJob: String = "",
 )
 
 class NexusModel(app: Application) : AndroidViewModel(app) {
@@ -78,13 +81,7 @@ class NexusModel(app: Application) : AndroidViewModel(app) {
 
     private suspend fun loadUser(user: NexusUser) {
         val rows = withContext(Dispatchers.IO) { store.list(user.login) }
-        state =
-            state.copy(
-                user = user,
-                history = rows,
-                conversation = Conversation(),
-                docs = emptyList(),
-            )
+        state = NexusState(user = user, history = rows, loading = state.loading, busy = state.busy)
     }
 
     private suspend fun persist(c: Conversation, owner: String) {
@@ -146,6 +143,7 @@ class NexusModel(app: Application) : AndroidViewModel(app) {
     suspend fun accept(result: JSONObject) {
         val info = result.getJSONObject("usuario")
         val user = NexusUser(info.getString("login"), info.optString("tier", "free"))
+        stopVoice()
         withContext(Dispatchers.IO) {
             store.list(user.login)
             store.session(JSONObject().put("token", result.getString("token")))
@@ -248,12 +246,18 @@ class NexusModel(app: Application) : AndroidViewModel(app) {
                     Conversation(model = state.conversation.model, temporary = temporary),
                 docs = emptyList(),
                 notice = "",
+                approvalBusy = "",
+                stopRequestedJob = "",
+                workLastUpdate = 0L,
+                workConnected = true,
             )
     }
 
     fun select(c: Conversation) {
         if (state.busy) return
-        state = state.copy(conversation = c, docs = emptyList(), notice = "")
+        state = state.copy(conversation = c, docs = emptyList(), notice = "",
+            workMode = c.messages.any { it.work != null }, workConnected = true,
+            workLastUpdate = 0L, stopRequestedJob = "", approvalBusy = "")
         val m = c.messages.lastOrNull()
         if (m?.work?.active == true) {
             state = state.copy(busy = true)
@@ -338,12 +342,19 @@ class NexusModel(app: Application) : AndroidViewModel(app) {
     fun stop() {
         val mission = state.conversation.messages.lastOrNull()?.work
         if (mission?.active == true) {
+            if (state.stopRequestedJob == mission.jobId) return
+            val epoch = sessionEpoch
+            state = state.copy(stopRequestedJob = mission.jobId)
             viewModelScope.launch {
                 try {
                     api.json("/api/work/session/stop", JSONObject().put("job_id", mission.jobId))
-                    notice("Parada solicitada. Aguardando o ponto seguro da execução.")
+                    if (epoch == sessionEpoch)
+                        notice("Parada solicitada. Aguardando o ponto seguro da execução.")
                 } catch (e: Exception) {
-                    notice(e.message ?: "Parada não confirmada.")
+                    if (epoch == sessionEpoch) {
+                        // A lost response may still mean the server accepted the request.
+                        notice("Parada não confirmada. Acompanhe a missão antes de repetir.")
+                    }
                 }
             }
             return
@@ -460,6 +471,10 @@ class NexusModel(app: Application) : AndroidViewModel(app) {
         val epoch = sessionEpoch
         val old = state.conversation
         val docs = state.docs
+        if (old.messages.lastOrNull()?.work?.active == true) {
+            notice("Consulte a missão existente antes de iniciar outra tarefa nesta conversa.")
+            return
+        }
         if (old.model.isBlank()) {
             notice("Selecione um modelo.")
             return
@@ -473,7 +488,8 @@ class NexusModel(app: Application) : AndroidViewModel(app) {
                 messages = messages + answer,
                 updated = System.currentTimeMillis(),
             )
-        state = state.copy(conversation = next, docs = emptyList(), busy = true, notice = "")
+        state = state.copy(conversation = next, docs = emptyList(), busy = true, notice = "",
+            workConnected = true, workLastUpdate = 0L, stopRequestedJob = "")
         viewModelScope.launch {
             try {
                 persist(next, user.login)
@@ -525,6 +541,7 @@ class NexusModel(app: Application) : AndroidViewModel(app) {
         epoch: Int,
     ) {
         var c = initial
+        var retryMillis = 1000L
         try {
             while (epoch == sessionEpoch && state.conversation.id == initial.id) {
                 var message = c.messages.first { it.id == messageId }
@@ -536,7 +553,11 @@ class NexusModel(app: Application) : AndroidViewModel(app) {
                             JSONObject().put("job_id", before.jobId).put("after", before.cursor),
                         )
                     } catch (e: ApiFailure) {
-                        if (e.status in listOf(401, 403, 404)) throw e
+                        if (epoch != sessionEpoch) break
+                        if (e.status in listOf(401, 403, 404)) {
+                            state = state.copy(workConnected = false)
+                            throw e
+                        }
                         if (e.status == 409) {
                             c =
                                 c.copy(
@@ -547,38 +568,54 @@ class NexusModel(app: Application) : AndroidViewModel(app) {
                                             else it
                                         }
                                 )
+                            state = state.copy(workConnected = false)
+                            delay(retryMillis)
+                            retryMillis = (retryMillis * 2).coerceAtMost(30000L)
                             continue
                         }
+                        state = state.copy(workConnected = false)
                         notice("Consulta temporariamente indisponível. Nenhuma ação foi repetida.")
-                        delay(2000)
+                        delay(retryMillis)
+                        retryMillis = (retryMillis * 2).coerceAtMost(30000L)
                         continue
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (_: Exception) {
                         if (epoch != sessionEpoch) break
+                        state = state.copy(workConnected = false)
                         notice("Reconectando à missão. Nenhuma ação foi repetida.")
-                        delay(2000)
+                        delay(retryMillis)
+                        retryMillis = (retryMillis * 2).coerceAtMost(30000L)
                         continue
                     }
                 if (epoch != sessionEpoch || state.conversation.id != initial.id) break
                 val mission = before.apply(result)
+                retryMillis = 1000L
                 message =
                     message.copy(
                         text = mission.displayText(),
                         work = mission,
                         status =
                             if (mission.active) "sending"
-                            else if (mission.state in listOf("error", "cancelled", "interrupted"))
+                            else if (mission.state in listOf("error", "failed", "cancelled", "canceled", "interrupted"))
                                 "error"
-                            else "complete",
+                            else if (mission.state in listOf("done", "completed", "complete", "succeeded", "success")) "complete"
+                            else "stopped",
                     )
                 c =
                     c.copy(
                         messages = c.messages.map { if (it.id == messageId) message else it },
                         updated = System.currentTimeMillis(),
                     )
-                state = state.copy(conversation = c)
+                state = state.copy(conversation = c, workConnected = true,
+                    workLastUpdate = System.currentTimeMillis(),
+                    stopRequestedJob = if (mission.active) state.stopRequestedJob else "",
+                    approvalBusy = state.approvalBusy.takeIf { pending ->
+                        mission.steps.any { it.actionId == pending && it.status == "waiting" }
+                    }.orEmpty())
                 persist(c, owner)
                 if (!mission.active) break
-                delay(100)
+                delay(1000)
             }
         } finally {
             if (epoch == sessionEpoch) {
@@ -598,7 +635,9 @@ class NexusModel(app: Application) : AndroidViewModel(app) {
         )
             return
         val owner = state.user?.login ?: return
+        val epoch = sessionEpoch
         state = state.copy(approvalBusy = actionId)
+        var acknowledged = false
         viewModelScope.launch {
             try {
                 api.json(
@@ -609,18 +648,19 @@ class NexusModel(app: Application) : AndroidViewModel(app) {
                         .put("action_id", actionId)
                         .put("decision", if (allow) "allow" else "deny"),
                 )
-                if (state.user?.login == owner)
+                acknowledged = true
+                if (epoch == sessionEpoch && state.user?.login == owner)
                     notice(
                         if (allow) "Autorização recebida. Acompanhe a execução."
                         else "Recusa recebida. Acompanhe o estado da missão."
                     )
             } catch (e: Exception) {
-                if (state.user?.login == owner)
+                if (epoch == sessionEpoch && state.user?.login == owner)
                     notice(
                         e.message ?: "Decisão não confirmada. Consulte o estado antes de repetir."
                     )
             } finally {
-                state = state.copy(approvalBusy = "")
+                if (!acknowledged && epoch == sessionEpoch) state = state.copy(approvalBusy = "")
             }
         }
     }
@@ -664,9 +704,10 @@ class NexusModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun stopVoice() {
+        voiceEpoch++
         voice?.stop()
         voice = null
-        state = state.copy(voiceActive = false)
+        state = state.copy(voiceActive = false, voiceStatus = "", voiceTranscript = emptyList())
     }
 
     fun muteVoice() {

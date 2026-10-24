@@ -22,7 +22,7 @@ data class WorkMission(
             .put("raw", raw)
 
     val active
-        get() = state in listOf("starting", "running", "unconfirmed")
+        get() = state in listOf("starting", "running", "unconfirmed", "awaiting_approval", "stop_requested")
 
     fun displayText(): String {
         var text =
@@ -36,8 +36,9 @@ data class WorkMission(
 
     fun apply(response: JSONObject): WorkMission {
         var next = this
-        response.optJSONArray("events")?.objects()?.forEach { event ->
+        response.optJSONArray("events")?.objects()?.sortedBy { it.optInt("seq") }?.forEach { event ->
             val seq = event.optInt("seq")
+            // Preserve the existing cursor contract; order a batch before deduplicating it.
             if (seq > next.cursor) {
                 val raw = next.raw + event.optString("data")
                 require(raw.length <= 2_000_000) {

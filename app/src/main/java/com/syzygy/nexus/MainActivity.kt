@@ -247,7 +247,20 @@ fun NexusApp(model: NexusModel) {
                 }
             },
         ) {
-            Scaffold(
+            if (state.workMode && state.user != null) {
+                WorkCommandWorkspace(
+                    model = model,
+                    dark = dark,
+                    onChat = { model.workMode() },
+                    onProfile = { panel = "settings" },
+                    onModels = { panel = "models" },
+                    onTools = { panel = "tools" },
+                    onAttach = {
+                        picker.launch(arrayOf("application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "text/plain"))
+                    },
+                    onVoice = { panel = "voice" },
+                )
+            } else Scaffold(
                 topBar = {
                     Row(
                         Modifier.fillMaxWidth()
@@ -1297,15 +1310,7 @@ fun NativeWorkCard(
     ) {
         Column(Modifier.padding(14.dp)) {
             Text(
-                when (mission.state) {
-                    "starting" -> "Preparando missão"
-                    "running" -> "Work em execução"
-                    "cancelled" -> "Missão cancelada"
-                    "error" -> "Missão não concluída"
-                    "interrupted" -> "Execução interrompida"
-                    "unconfirmed" -> "Estado ainda não confirmado"
-                    else -> "Missão concluída"
-                },
+                workStateLabel(mission.state),
                 fontWeight = FontWeight.SemiBold,
             )
             mission.steps.takeLast(12).forEach { step ->
